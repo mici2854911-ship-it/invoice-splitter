@@ -60,9 +60,23 @@ _DATE_FORMATS = re.compile(r"\b(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4})\b")
 
 
 # ── Excel summary reader ──────────────────────────────────────────────────────
+def _cell_to_float(val) -> float | None:
+    if val is None:
+        return None
+    try:
+        return float(str(val).replace(",", "").strip())
+    except (ValueError, TypeError):
+        return None
+
+
 def parse_summary_from_excel(excel_path: str) -> tuple[list[dict], str, str]:
-    """Read summary rows directly from an Excel file.
+    """Read summary rows from the active sheet of an Excel file.
     Returns (summary_rows, company_name, date_str).
+
+    Expected format (CHILAT-style):
+      Row 1: ... company_name ... date ...
+      Row 2: headers (Detail / Amount)
+      Rows 3+: item_no(B) | vendor(C) | desc(D) | ... | amount(F or H)
     """
     if not _HAVE_OPENPYXL:
         raise RuntimeError("openpyxl not installed. Run setup.bat option 1.")
@@ -70,79 +84,58 @@ def parse_summary_from_excel(excel_path: str) -> tuple[list[dict], str, str]:
     wb = openpyxl.load_workbook(excel_path, data_only=True)
     ws = wb.active
 
-    # Extract company name from top-left area (first few rows, first few cols)
+    all_rows = list(ws.iter_rows(values_only=True))
+
+    # ── Company name & date from row 1 ────────────────────────────────────────
     company_name = ""
-    date_str = ""
-    for row in ws.iter_rows(min_row=1, max_row=6, max_col=6, values_only=True):
-        for cell in row:
-            if not cell:
+    date_str     = ""
+    if all_rows:
+        for cell in all_rows[0]:
+            if cell is None:
+                continue
+            import datetime as _dt
+            if isinstance(cell, _dt.datetime):
+                date_str = cell.strftime("%d/%m/%Y")
                 continue
             val = str(cell).strip()
+            if not val:
+                continue
             if not company_name and _COMPANY_KEYWORDS.search(val):
                 company_name = val
-            if not date_str and _DATE_FORMATS.search(val):
+            if not date_str:
                 m = _DATE_FORMATS.search(val)
                 if m:
                     date_str = m.group(1)
 
-    # Find amount column and vendor column by scanning header row
-    header_row_idx = None
-    vendor_col = None
-    amount_col = None
-    for r_idx, row in enumerate(ws.iter_rows(min_row=1, max_row=10, values_only=True), 1):
-        for c_idx, cell in enumerate(row, 1):
-            if not cell:
-                continue
-            val = str(cell).lower().strip()
-            if any(k in val for k in ["vendor", "supplier", "ผู้รับเงิน", "บริษัท", "ชื่อ", "name", "company"]):
-                vendor_col = c_idx
-                header_row_idx = r_idx
-            if any(k in val for k in ["amount", "จำนวน", "เงิน", "total", "sum"]):
-                amount_col = c_idx
-                header_row_idx = r_idx
-
-    if not header_row_idx:
-        header_row_idx = 1
-
-    # If columns not found by header, scan first rows for number patterns
-    if not amount_col or not vendor_col:
-        for r_idx, row in enumerate(ws.iter_rows(min_row=(header_row_idx or 1) + 1,
-                                                   max_row=(header_row_idx or 1) + 5,
-                                                   values_only=True),
-                                    (header_row_idx or 1) + 1):
-            for c_idx, cell in enumerate(row, 1):
-                if cell is None:
-                    continue
-                try:
-                    v = float(str(cell).replace(",", ""))
-                    if v > 100 and not amount_col:
-                        amount_col = c_idx
-                except (ValueError, TypeError):
-                    if not vendor_col and str(cell).strip():
-                        vendor_col = c_idx
-
+    # ── Find data rows: row where col B is a positive integer (item number) ───
+    # Columns (0-based): B=1, C=2, D=3, E=4, F=5, G=6, H=7
     summary_rows = []
-    row_idx = 0
-    for row in ws.iter_rows(min_row=(header_row_idx or 1) + 1, values_only=True):
-        vendor_val = row[vendor_col - 1] if vendor_col and len(row) >= vendor_col else None
-        amount_val = row[amount_col - 1] if amount_col and len(row) >= amount_col else None
-        if not vendor_val or not amount_val:
+    for row in all_rows[1:]:          # skip row 1 (company header)
+        if len(row) < 3:
             continue
-        try:
-            amount = float(str(amount_val).replace(",", ""))
-        except (ValueError, TypeError):
+        # col B must be a small positive integer (item number)
+        item_no = _cell_to_float(row[1])
+        if item_no is None or item_no <= 0 or item_no != int(item_no) or item_no > 999:
             continue
-        if amount <= 0:
-            continue
-        vendor = str(vendor_val).strip()
+        # col C = vendor name
+        vendor = str(row[2]).strip() if row[2] is not None else ""
         if not vendor:
             continue
+        # amount: prefer col F (index 5), fall back to col H (index 7)
+        amount = None
+        for col_idx in [5, 7, 6, 4]:
+            if len(row) > col_idx:
+                v = _cell_to_float(row[col_idx])
+                if v and v > 0:
+                    amount = v
+                    break
+        if amount is None:
+            continue
         summary_rows.append({
-            "row_idx": row_idx,
+            "row_idx": int(item_no),
             "vendor":  vendor,
             "amount":  amount,
         })
-        row_idx += 1
 
     # Fallback company from file name
     if not company_name:
@@ -211,6 +204,7 @@ def classify_page(text: str) -> dict:
         "beneficiary":      beneficiary,
         "all_amounts":      all_amounts,
         "dates":            dates,
+        "raw_text":         text,
         "inv_numbers":      inv_numbers,
         "full_text":        text,
     }
@@ -278,20 +272,9 @@ def _best_vendor(lines: list, amount_idx: int,
 # ── Summary parser ────────────────────────────────────────────────────────────
 def parse_summary(text: str, ca_amounts: list[float],
                   prefilled_rows: list[dict] | None = None) -> list[dict]:
-    # Excel mode: rows already parsed, just assign row_idx by matching amounts
+    # Excel mode: rows already parsed — return them as-is (order from Excel)
     if prefilled_rows is not None:
-        seen: set[float] = set()
-        result = []
-        for ca_amt in ca_amounts:
-            best = min(prefilled_rows, key=lambda r: abs(r["amount"] - ca_amt), default=None)
-            if best and abs(best["amount"] - ca_amt) < 1.0 and ca_amt not in seen:
-                seen.add(ca_amt)
-                result.append({
-                    "row_idx": len(result) + 1,
-                    "vendor":  best["vendor"],
-                    "amount":  ca_amt,
-                })
-        return result
+        return [dict(r) for r in prefilled_rows]
 
     # PDF mode: OCR text
     lines    = text.splitlines()
@@ -315,19 +298,49 @@ def parse_summary(text: str, ca_amounts: list[float],
 
 
 # ── Page assignment ───────────────────────────────────────────────────────────
+def _vendor_in_text(vendor: str, text: str) -> bool:
+    """Check if any significant word from vendor name appears in the OCR text."""
+    text_lower = text.lower()
+    # try full name first
+    words = [w for w in re.split(r"[\s,.\-/]+", vendor) if len(w) > 3]
+    if not words:
+        return vendor.lower() in text_lower
+    matches = sum(1 for w in words if w.lower() in text_lower)
+    return matches >= max(1, len(words) // 2)
+
+
 def assign_pages(summary_rows: list[dict],
                  page_infos: list[dict]) -> list[int | None]:
     n           = len(page_infos)
     assignments = [None] * n
 
+    # Find rows that share the same amount (ambiguous)
+    from collections import Counter
+    amt_counts = Counter(round(r["amount"], 2) for r in summary_rows)
+
     # build map: abs_page_idx → row_idx  for CA anchors
     ca_map: dict[int, int] = {}
     for abs_idx, info in enumerate(page_infos):
         if info["is_credit_advice"] and info["payment_amount"] is not None:
-            for row in summary_rows:
-                if abs(info["payment_amount"] - row["amount"]) < 0.02:
-                    ca_map[abs_idx] = row["row_idx"]
-                    break
+            page_text = info.get("raw_text", "")
+            candidates = [r for r in summary_rows
+                          if abs(info["payment_amount"] - r["amount"]) < 0.02]
+            if not candidates:
+                continue
+            if len(candidates) == 1:
+                ca_map[abs_idx] = candidates[0]["row_idx"]
+            else:
+                # Same amount — try vendor name match in page text
+                matched = [r for r in candidates if _vendor_in_text(r["vendor"], page_text)]
+                if matched:
+                    ca_map[abs_idx] = matched[0]["row_idx"]
+                else:
+                    # fallback: first unassigned candidate
+                    assigned_rows = set(ca_map.values())
+                    for r in candidates:
+                        if r["row_idx"] not in assigned_rows:
+                            ca_map[abs_idx] = r["row_idx"]
+                            break
 
     if not ca_map:
         return assignments
