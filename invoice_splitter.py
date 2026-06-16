@@ -474,89 +474,39 @@ def extract_company_and_date(summary_text: str,
 
 # ── Excel → PDF converter ─────────────────────────────────────────────────────
 def _excel_to_pdf(excel_path: str, pdf_path: str):
-    """Screenshot the first Excel sheet and save as PDF."""
-    import subprocess, tempfile, time
+    """Export the first Excel sheet directly to PDF using Office COM."""
+    import subprocess, tempfile
 
-    # Write PowerShell script to a temp file (avoids all escaping issues)
+    ep = excel_path.replace("'", "''")
+    pp = pdf_path.replace("'", "''")
+
     script = f"""
 $ErrorActionPreference = 'Stop'
 $xl = New-Object -ComObject Excel.Application
-$xl.Visible = $true
+$xl.Visible = $false
 $xl.DisplayAlerts = $false
-$wb = $xl.Workbooks.Open([string]'{excel_path.replace(chr(39), "''")}')
-$ws = $wb.Worksheets(1)
-$ws.Activate()
-Start-Sleep -Milliseconds 800
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
-$screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-$bmp = New-Object System.Drawing.Bitmap($screen.Width, $screen.Height)
-$g = [System.Drawing.Graphics]::FromImage($bmp)
-$g.CopyFromScreen($screen.Location, [System.Drawing.Point]::Empty, $screen.Size)
-$g.Dispose()
-$imgPath = [System.IO.Path]::ChangeExtension('{pdf_path.replace(chr(39), "''")}', '.png')
-$bmp.Save($imgPath)
-$bmp.Dispose()
-$wb.Close($false)
-$xl.Quit()
-[System.Runtime.InteropServices.Marshal]::ReleaseComObject($xl) | Out-Null
-Write-Output $imgPath
+try {{
+    $wb = $xl.Workbooks.Open('{ep}')
+    $wb.Worksheets(1).ExportAsFixedFormat(0, '{pp}')
+    $wb.Close($false)
+}} finally {{
+    $xl.Quit()
+    [System.Runtime.InteropServices.Marshal]::ReleaseComObject($xl) | Out-Null
+}}
 """
     ps1 = tempfile.NamedTemporaryFile(suffix=".ps1", mode="w",
-                                       encoding="utf-8", delete=False)
+                                       encoding="utf-8-sig", delete=False)
     ps1.write(script)
     ps1.close()
-
     try:
-        result = subprocess.run(
+        subprocess.run(
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1.name],
-            capture_output=True, text=True, timeout=30)
-        img_path = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
-        if img_path and os.path.exists(img_path):
-            img = Image.open(img_path)
-            w, h = img.size
-            # Convert image to PDF via fitz
-            img_bytes = io.BytesIO()
-            img.save(img_bytes, format="PNG")
-            img_bytes.seek(0)
-            pdf_doc = fitz.open()
-            img_doc  = fitz.open("png", img_bytes.read())
-            pdf_doc.insert_pdf(img_doc)
-            pdf_doc.save(pdf_path)
-            pdf_doc.close()
-            os.remove(img_path)
-            return
-    except Exception:
-        pass
+            capture_output=True, timeout=60)
     finally:
         try:
             os.remove(ps1.name)
         except Exception:
             pass
-
-    # Fallback: export via COM ExportAsFixedFormat
-    try:
-        script2 = f"""
-$xl = New-Object -ComObject Excel.Application
-$xl.Visible = $false
-$xl.DisplayAlerts = $false
-$wb = $xl.Workbooks.Open([string]'{excel_path.replace(chr(39), "''")}')
-$wb.Worksheets(1).ExportAsFixedFormat(0, [string]'{pdf_path.replace(chr(39), "''")}')
-$wb.Close($false)
-$xl.Quit()
-"""
-        ps1b = tempfile.NamedTemporaryFile(suffix=".ps1", mode="w",
-                                            encoding="utf-8", delete=False)
-        ps1b.write(script2)
-        ps1b.close()
-        subprocess.run(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1b.name],
-            capture_output=True, timeout=30)
-        os.remove(ps1b.name)
-        if os.path.exists(pdf_path):
-            return
-    except Exception:
-        pass
 
 
 # ── PDF splitter ──────────────────────────────────────────────────────────────
