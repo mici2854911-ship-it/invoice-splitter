@@ -478,7 +478,8 @@ def split_pdf(doc: fitz.Document, assignments: list[int | None],
               page_infos: list[dict],
               summary_text: str = "",
               excel_company: str = "",
-              excel_date: str = "") -> tuple[list[dict], str]:
+              excel_date: str = "",
+              excel_path: str = "") -> tuple[list[dict], str]:
     """
     Split doc into named PDF files inside:
         Payment_[CompanyName]_[Date]/
@@ -494,8 +495,14 @@ def split_pdf(doc: fitz.Document, assignments: list[int | None],
     out_dir     = os.path.join(base_out_dir, root_folder)
     os.makedirs(out_dir, exist_ok=True)
 
-    # Save page 1 as summary.pdf only in PDF mode (not Excel mode)
-    if not excel_company:
+    if excel_company:
+        # Excel mode: copy the Excel file to the output folder
+        import shutil
+        if excel_path and os.path.exists(excel_path):
+            ext = os.path.splitext(excel_path)[1]
+            shutil.copy2(excel_path, os.path.join(out_dir, f"summary{ext}"))
+    else:
+        # PDF mode: save page 1 as summary.pdf
         summary_pdf = fitz.open()
         summary_pdf.insert_pdf(doc, from_page=0, to_page=0)
         summary_pdf.save(os.path.join(out_dir, "summary.pdf"))
@@ -886,7 +893,8 @@ class App(tk.Tk):
                 doc, assignments, summary_rows, out_dir,
                 page_infos, summary_text=self._summary_text,
                 excel_company=getattr(self, "_excel_company", ""),
-                excel_date=getattr(self, "_excel_date", ""))
+                excel_date=getattr(self, "_excel_date", ""),
+                excel_path=getattr(self, "_excel_path", "") or "")
             self._prog(100)
 
             n_match    = sum(1 for r in results if r["match_status"] == "MATCH")
