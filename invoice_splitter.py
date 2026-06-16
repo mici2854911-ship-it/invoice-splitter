@@ -703,11 +703,20 @@ class App(tk.Tk):
                     parse_summary_from_excel(excel_path)
                 self._prog(5)
 
+                excel_amounts = {round(r["amount"], 2) for r in summary_rows_pre}
+
                 page_infos: list[dict] = []
                 for i in range(0, n):
                     self._status(f"Scanning page {i+1} / {n}…")
                     text = ocr_page(doc, i)
                     info = classify_page(text)
+                    # In Excel mode: any page containing a matching amount is an anchor
+                    if not info["is_credit_advice"]:
+                        for amt in info["all_amounts"]:
+                            if round(amt, 2) in excel_amounts:
+                                info["is_credit_advice"] = True
+                                info["payment_amount"]   = amt
+                                break
                     page_infos.append(info)
                     self._prog(5 + int(75 * (i + 1) / n))
 
@@ -719,15 +728,14 @@ class App(tk.Tk):
                 if not ca_amounts:
                     self.after(0, lambda: messagebox.showerror(
                         "Error",
-                        "No payment confirmation pages found.\n"
-                        "Make sure the PDF contains Credit Advice or Success transfer pages."
+                        "No matching amounts found in PDF.\n"
+                        "Make sure the PDF contains the payment amounts listed in the Excel."
                     ))
                     return
 
                 summary_rows = parse_summary(summary_text, ca_amounts,
                                              prefilled_rows=summary_rows_pre)
                 self._prog(82)
-                # store company/date for split_pdf
                 self._excel_company = company_from_excel
                 self._excel_date    = date_from_excel
 
