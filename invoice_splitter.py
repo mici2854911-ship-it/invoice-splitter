@@ -495,7 +495,7 @@ try {{
 }}
 """
     ps1 = tempfile.NamedTemporaryFile(suffix=".ps1", mode="w",
-                                       encoding="utf-8-sig", delete=False)
+                                       encoding="utf-16", delete=False)
     ps1.write(script)
     ps1.close()
     try:
