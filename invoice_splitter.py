@@ -40,8 +40,11 @@ LANG        = "eng+tha"
 
 NUM_RE        = re.compile(r"\b(\d{1,3}(?:,\d{3})*\.\d{2})\b")
 CREDIT_ADV_RE = re.compile(r"credit\s+advice", re.IGNORECASE)
+SUCCESS_RE    = re.compile(r"\bsuccess\b", re.IGNORECASE)
 PMT_AMT_RE    = re.compile(
     r"payment\s+amount\s*[:\-]?\s*([\d,]+\.\d{2})", re.IGNORECASE)
+AMOUNT_RE     = re.compile(
+    r"(?<!\w)amount\s*[:\-]?\s*([\d,]+\.\d{2})", re.IGNORECASE)
 
 _COMPANY_KEYWORDS = re.compile(
     r"\b(co\.?,?\s*ltd\.?|company|corporation|corp\.?|public|co\.,ltd|pte\.?|inc\.?|llc)\b",
@@ -76,10 +79,10 @@ def _ocr_header_cell(doc: fitz.Document) -> str:
 
 # ── Page classifier ───────────────────────────────────────────────────────────
 def classify_page(text: str) -> dict:
-    is_ca       = bool(CREDIT_ADV_RE.search(text))
+    is_ca       = bool(CREDIT_ADV_RE.search(text)) or bool(SUCCESS_RE.search(text))
     pmt_amount  = None
     if is_ca:
-        m = PMT_AMT_RE.search(text)
+        m = PMT_AMT_RE.search(text) or AMOUNT_RE.search(text)
         if m:
             pmt_amount = float(m.group(1).replace(",", ""))
 
@@ -561,8 +564,8 @@ class App(tk.Tk):
             if not ca_amounts:
                 self.after(0, lambda: messagebox.showerror(
                     "Error",
-                    "No Credit Advice pages found.\n"
-                    "Make sure pages 2+ contain payment confirmations."
+                    "No payment confirmation pages found.\n"
+                    "Make sure pages 2+ contain Credit Advice or Success transfer pages."
                 ))
                 return
 
