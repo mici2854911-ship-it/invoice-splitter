@@ -480,31 +480,33 @@ def _excel_to_pdf(excel_path: str, pdf_path: str):
     ep = excel_path.replace("'", "''")
     pp = pdf_path.replace("'", "''")
 
-    script = f"""
-$ErrorActionPreference = 'Stop'
-$xl = New-Object -ComObject Excel.Application
-$xl.Visible = $false
-$xl.DisplayAlerts = $false
-try {{
-    $wb = $xl.Workbooks.Open('{ep}')
-    $wb.Worksheets(1).ExportAsFixedFormat(0, '{pp}')
-    $wb.Close($false)
-}} finally {{
-    $xl.Quit()
-    [System.Runtime.InteropServices.Marshal]::ReleaseComObject($xl) | Out-Null
-}}
-"""
+    script = (
+        "$ErrorActionPreference = 'Stop'\n"
+        "$xl = New-Object -ComObject Excel.Application\n"
+        "$xl.Visible = $false\n"
+        "$xl.DisplayAlerts = $false\n"
+        "try {\n"
+        f"    $wb = $xl.Workbooks.Open('{ep}')\n"
+        f"    $wb.Worksheets(1).ExportAsFixedFormat(0, '{pp}')\n"
+        "    $wb.Close($false)\n"
+        "} finally {\n"
+        "    $xl.Quit()\n"
+        "    [System.Runtime.InteropServices.Marshal]::ReleaseComObject($xl) | Out-Null\n"
+        "}\n"
+    )
+
     ps1 = tempfile.NamedTemporaryFile(suffix=".ps1", mode="w",
                                        encoding="utf-16", delete=False)
+    ps1name = ps1.name
     ps1.write(script)
     ps1.close()
     try:
         subprocess.run(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1.name],
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1name],
             capture_output=True, timeout=60)
     finally:
         try:
-            os.remove(ps1.name)
+            os.remove(ps1name)
         except Exception:
             pass
 
