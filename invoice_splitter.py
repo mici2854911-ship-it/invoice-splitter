@@ -472,6 +472,66 @@ def extract_company_and_date(summary_text: str,
     return company_safe, date_safe
 
 
+# ── Excel → PDF converter ─────────────────────────────────────────────────────
+def _excel_to_pdf(excel_path: str, pdf_path: str):
+    """Convert Excel file to a simple PDF table using PyMuPDF."""
+    try:
+        # Try Windows COM (requires Microsoft Office)
+        import subprocess
+        ps = (
+            f'$xl = New-Object -ComObject Excel.Application;'
+            f'$xl.Visible = $false;'
+            f'$wb = $xl.Workbooks.Open("{excel_path}");'
+            f'$wb.ActiveSheet.ExportAsFixedFormat(0, "{pdf_path}");'
+            f'$wb.Close($false);'
+            f'$xl.Quit()'
+        )
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps],
+            timeout=30, capture_output=True)
+        if result.returncode == 0 and os.path.exists(pdf_path):
+            return
+    except Exception:
+        pass
+
+    # Fallback: build a simple PDF table with PyMuPDF
+    if not _HAVE_OPENPYXL:
+        return
+    wb = openpyxl.load_workbook(excel_path, data_only=True)
+    ws = wb.active
+    rows = [r for r in ws.iter_rows(values_only=True) if any(c is not None for c in r)]
+
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)   # A4
+
+    y = 40
+    page.insert_text((40, y), os.path.basename(excel_path),
+                     fontsize=11, fontname="helv", color=(0.1, 0.1, 0.5))
+    y += 20
+
+    col_width = 110
+    max_cols  = min(10, max((len(r) for r in rows), default=1))
+
+    for r_idx, row in enumerate(rows):
+        if y > 800:
+            page = doc.new_page(width=595, height=842)
+            y = 40
+        x = 30
+        for c_idx, cell in enumerate(row[:max_cols]):
+            val = "" if cell is None else str(cell)
+            if len(val) > 20:
+                val = val[:19] + "…"
+            color = (0.2, 0.2, 0.2) if r_idx > 0 else (0.05, 0.2, 0.5)
+            fontsize = 7 if r_idx > 0 else 8
+            page.insert_text((x, y), val, fontsize=fontsize,
+                             fontname="helv", color=color)
+            x += col_width
+        y += 13
+
+    doc.save(pdf_path)
+    doc.close()
+
+
 # ── PDF splitter ──────────────────────────────────────────────────────────────
 def split_pdf(doc: fitz.Document, assignments: list[int | None],
               summary_rows: list[dict], base_out_dir: str,
@@ -496,11 +556,9 @@ def split_pdf(doc: fitz.Document, assignments: list[int | None],
     os.makedirs(out_dir, exist_ok=True)
 
     if excel_company:
-        # Excel mode: copy the Excel file to the output folder
-        import shutil
+        # Excel mode: convert Excel to summary.pdf
         if excel_path and os.path.exists(excel_path):
-            ext = os.path.splitext(excel_path)[1]
-            shutil.copy2(excel_path, os.path.join(out_dir, f"summary{ext}"))
+            _excel_to_pdf(excel_path, os.path.join(out_dir, "summary.pdf"))
     else:
         # PDF mode: save page 1 as summary.pdf
         summary_pdf = fitz.open()
