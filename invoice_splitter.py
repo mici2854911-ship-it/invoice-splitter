@@ -474,66 +474,89 @@ def extract_company_and_date(summary_text: str,
 
 # ── Excel → PDF converter ─────────────────────────────────────────────────────
 def _excel_to_pdf(excel_path: str, pdf_path: str):
-    """Convert Excel file to a simple PDF table using PyMuPDF."""
+    """Screenshot the first Excel sheet and save as PDF."""
+    import subprocess, tempfile, time
+
+    # Write PowerShell script to a temp file (avoids all escaping issues)
+    script = f"""
+$ErrorActionPreference = 'Stop'
+$xl = New-Object -ComObject Excel.Application
+$xl.Visible = $true
+$xl.DisplayAlerts = $false
+$wb = $xl.Workbooks.Open([string]'{excel_path.replace(chr(39), "''")}')
+$ws = $wb.Worksheets(1)
+$ws.Activate()
+Start-Sleep -Milliseconds 800
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+$bmp = New-Object System.Drawing.Bitmap($screen.Width, $screen.Height)
+$g = [System.Drawing.Graphics]::FromImage($bmp)
+$g.CopyFromScreen($screen.Location, [System.Drawing.Point]::Empty, $screen.Size)
+$g.Dispose()
+$imgPath = [System.IO.Path]::ChangeExtension('{pdf_path.replace(chr(39), "''")}', '.png')
+$bmp.Save($imgPath)
+$bmp.Dispose()
+$wb.Close($false)
+$xl.Quit()
+[System.Runtime.InteropServices.Marshal]::ReleaseComObject($xl) | Out-Null
+Write-Output $imgPath
+"""
+    ps1 = tempfile.NamedTemporaryFile(suffix=".ps1", mode="w",
+                                       encoding="utf-8", delete=False)
+    ps1.write(script)
+    ps1.close()
+
     try:
-        # Try Windows COM (requires Microsoft Office)
-        import subprocess
-        ep = excel_path.replace("'", "''")
-        pp = pdf_path.replace("'", "''")
-        ps = (
-            f"$xl = New-Object -ComObject Excel.Application;"
-            f"$xl.Visible = $false;"
-            f"$wb = $xl.Workbooks.Open('{ep}');"
-            f"$wb.Worksheets(1).ExportAsFixedFormat(0, '{pp}');"
-            f"$wb.Close($false);"
-            f"[System.Runtime.Interopservices.Marshal]::ReleaseComObject($wb) | Out-Null;"
-            f"$xl.Quit();"
-            f"[System.Runtime.Interopservices.Marshal]::ReleaseComObject($xl) | Out-Null"
-        )
         result = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
-            timeout=60, capture_output=True)
-        if result.returncode == 0 and os.path.exists(pdf_path):
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1.name],
+            capture_output=True, text=True, timeout=30)
+        img_path = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
+        if img_path and os.path.exists(img_path):
+            img = Image.open(img_path)
+            w, h = img.size
+            # Convert image to PDF via fitz
+            img_bytes = io.BytesIO()
+            img.save(img_bytes, format="PNG")
+            img_bytes.seek(0)
+            pdf_doc = fitz.open()
+            img_doc  = fitz.open("png", img_bytes.read())
+            pdf_doc.insert_pdf(img_doc)
+            pdf_doc.save(pdf_path)
+            pdf_doc.close()
+            os.remove(img_path)
             return
     except Exception:
         pass
+    finally:
+        try:
+            os.remove(ps1.name)
+        except Exception:
+            pass
 
-    # Fallback: build a simple PDF table with PyMuPDF
-    if not _HAVE_OPENPYXL:
-        return
-    wb = openpyxl.load_workbook(excel_path, data_only=True)
-    ws = wb.active
-    rows = [r for r in ws.iter_rows(values_only=True) if any(c is not None for c in r)]
-
-    doc = fitz.open()
-    page = doc.new_page(width=595, height=842)   # A4
-
-    y = 40
-    page.insert_text((40, y), os.path.basename(excel_path),
-                     fontsize=11, fontname="helv", color=(0.1, 0.1, 0.5))
-    y += 20
-
-    col_width = 110
-    max_cols  = min(10, max((len(r) for r in rows), default=1))
-
-    for r_idx, row in enumerate(rows):
-        if y > 800:
-            page = doc.new_page(width=595, height=842)
-            y = 40
-        x = 30
-        for c_idx, cell in enumerate(row[:max_cols]):
-            val = "" if cell is None else str(cell)
-            if len(val) > 20:
-                val = val[:19] + "…"
-            color = (0.2, 0.2, 0.2) if r_idx > 0 else (0.05, 0.2, 0.5)
-            fontsize = 7 if r_idx > 0 else 8
-            page.insert_text((x, y), val, fontsize=fontsize,
-                             fontname="helv", color=color)
-            x += col_width
-        y += 13
-
-    doc.save(pdf_path)
-    doc.close()
+    # Fallback: export via COM ExportAsFixedFormat
+    try:
+        script2 = f"""
+$xl = New-Object -ComObject Excel.Application
+$xl.Visible = $false
+$xl.DisplayAlerts = $false
+$wb = $xl.Workbooks.Open([string]'{excel_path.replace(chr(39), "''")}')
+$wb.Worksheets(1).ExportAsFixedFormat(0, [string]'{pdf_path.replace(chr(39), "''")}')
+$wb.Close($false)
+$xl.Quit()
+"""
+        ps1b = tempfile.NamedTemporaryFile(suffix=".ps1", mode="w",
+                                            encoding="utf-8", delete=False)
+        ps1b.write(script2)
+        ps1b.close()
+        subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1b.name],
+            capture_output=True, timeout=30)
+        os.remove(ps1b.name)
+        if os.path.exists(pdf_path):
+            return
+    except Exception:
+        pass
 
 
 # ── PDF splitter ──────────────────────────────────────────────────────────────
