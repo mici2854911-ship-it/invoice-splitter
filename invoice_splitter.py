@@ -534,10 +534,9 @@ def split_pdf(doc: fitz.Document, assignments: list[int | None],
     out_dir     = os.path.join(base_out_dir, root_folder)
     os.makedirs(out_dir, exist_ok=True)
 
-    if excel_company:
-        # Excel mode: convert Excel to summary.pdf
-        if excel_path and os.path.exists(excel_path):
-            _excel_to_pdf(excel_path, os.path.join(out_dir, "summary.pdf"))
+    if excel_path and os.path.exists(excel_path):
+        # Excel mode: convert first sheet to summary.pdf
+        _excel_to_pdf(excel_path, os.path.join(out_dir, "summary.pdf"))
     else:
         # PDF mode: save page 1 as summary.pdf
         summary_pdf = fitz.open()
