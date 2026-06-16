@@ -478,17 +478,21 @@ def _excel_to_pdf(excel_path: str, pdf_path: str):
     try:
         # Try Windows COM (requires Microsoft Office)
         import subprocess
+        ep = excel_path.replace("'", "''")
+        pp = pdf_path.replace("'", "''")
         ps = (
-            f'$xl = New-Object -ComObject Excel.Application;'
-            f'$xl.Visible = $false;'
-            f'$wb = $xl.Workbooks.Open("{excel_path}");'
-            f'$wb.Worksheets(1).ExportAsFixedFormat(0, "{pdf_path}");'
-            f'$wb.Close($false);'
-            f'$xl.Quit()'
+            f"$xl = New-Object -ComObject Excel.Application;"
+            f"$xl.Visible = $false;"
+            f"$wb = $xl.Workbooks.Open('{ep}');"
+            f"$wb.Worksheets(1).ExportAsFixedFormat(0, '{pp}');"
+            f"$wb.Close($false);"
+            f"[System.Runtime.Interopservices.Marshal]::ReleaseComObject($wb) | Out-Null;"
+            f"$xl.Quit();"
+            f"[System.Runtime.Interopservices.Marshal]::ReleaseComObject($xl) | Out-Null"
         )
         result = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", ps],
-            timeout=30, capture_output=True)
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+            timeout=60, capture_output=True)
         if result.returncode == 0 and os.path.exists(pdf_path):
             return
     except Exception:
