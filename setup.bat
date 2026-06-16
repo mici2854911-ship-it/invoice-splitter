@@ -7,16 +7,17 @@ echo  ============================================
 echo   Invoice Splitter - Setup
 echo  ============================================
 echo.
-echo   [1]  התקנה חדשה  (מחשב חדש)
-echo   [2]  עדכון גרסה
-echo   [3]  יציאה
+echo   [1]  Fresh Install  (new computer)
+echo   [2]  Update
+echo   [3]  Exit
 echo.
-set /p CHOICE=  בחר 1, 2 או 3 ולחץ Enter:
+choice /C 123 /N /M "  Choose 1, 2 or 3: "
+set CHOICE=%errorlevel%
 
-if "!CHOICE!"=="1" goto INSTALL
-if "!CHOICE!"=="2" goto UPDATE
-if "!CHOICE!"=="3" exit /b 0
-echo   בחירה לא תקינה. נסה שוב.
+if "%CHOICE%"=="1" goto INSTALL
+if "%CHOICE%"=="2" goto UPDATE
+if "%CHOICE%"=="3" exit /b 0
+echo   Invalid choice.
 pause & exit /b 1
 
 
