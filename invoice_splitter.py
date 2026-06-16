@@ -482,7 +482,7 @@ def _excel_to_pdf(excel_path: str, pdf_path: str):
             f'$xl = New-Object -ComObject Excel.Application;'
             f'$xl.Visible = $false;'
             f'$wb = $xl.Workbooks.Open("{excel_path}");'
-            f'$wb.ActiveSheet.ExportAsFixedFormat(0, "{pdf_path}");'
+            f'$wb.Worksheets(1).ExportAsFixedFormat(0, "{pdf_path}");'
             f'$wb.Close($false);'
             f'$xl.Quit()'
         )
