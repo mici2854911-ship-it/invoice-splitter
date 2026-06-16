@@ -111,8 +111,13 @@ echo.
 set "PYTHON="
 if exist "%LOCALAPPDATA%\Programs\Python\Python311\python.exe" set "PYTHON=%LOCALAPPDATA%\Programs\Python\Python311\python.exe"
 if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" set "PYTHON=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+if exist "%LOCALAPPDATA%\Programs\Python\Python313\python.exe" set "PYTHON=%LOCALAPPDATA%\Programs\Python\Python313\python.exe"
+if exist "C:\Python311\python.exe" set "PYTHON=C:\Python311\python.exe"
+if exist "C:\Python312\python.exe" set "PYTHON=C:\Python312\python.exe"
+if exist "C:\Python313\python.exe" set "PYTHON=C:\Python313\python.exe"
 python --version >nul 2>&1
 if %errorlevel% equ 0 if "!PYTHON!"=="" set "PYTHON=python"
+echo Python path: [!PYTHON!]
 if "!PYTHON!"=="" ( echo שגיאה: Python לא נמצא. הרץ התקנה חדשה תחילה. & pause & exit /b 1 )
 echo [OK] Python נמצא.
 
@@ -120,8 +125,10 @@ echo [OK] Python נמצא.
 echo.
 echo [1/2] מוריד גרסה עדכנית של התוכנה...
 curl -L --output "%~dp0invoice_splitter.py" "https://raw.githubusercontent.com/mici2854911-ship-it/invoice-splitter/master/invoice_splitter.py"
+echo curl result: %errorlevel%
 if %errorlevel% neq 0 ( echo שגיאה בהורדת העדכון. בדוק חיבור לאינטרנט. & pause & exit /b 1 )
 echo [OK] התוכנה עודכנה.
+pause
 
 :: Update packages
 echo.
