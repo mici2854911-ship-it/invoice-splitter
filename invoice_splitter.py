@@ -31,6 +31,12 @@ import numpy as np
 import pytesseract
 from PIL import Image
 
+try:
+    import openpyxl
+    _HAVE_OPENPYXL = True
+except ImportError:
+    _HAVE_OPENPYXL = False
+
 # ── Tesseract path ────────────────────────────────────────────────────────────
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
@@ -51,6 +57,98 @@ _COMPANY_KEYWORDS = re.compile(
     re.IGNORECASE,
 )
 _DATE_FORMATS = re.compile(r"\b(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4})\b")
+
+
+# ── Excel summary reader ──────────────────────────────────────────────────────
+def parse_summary_from_excel(excel_path: str) -> tuple[list[dict], str, str]:
+    """Read summary rows directly from an Excel file.
+    Returns (summary_rows, company_name, date_str).
+    """
+    if not _HAVE_OPENPYXL:
+        raise RuntimeError("openpyxl not installed. Run setup.bat option 1.")
+
+    wb = openpyxl.load_workbook(excel_path, data_only=True)
+    ws = wb.active
+
+    # Extract company name from top-left area (first few rows, first few cols)
+    company_name = ""
+    date_str = ""
+    for row in ws.iter_rows(min_row=1, max_row=6, max_col=6, values_only=True):
+        for cell in row:
+            if not cell:
+                continue
+            val = str(cell).strip()
+            if not company_name and _COMPANY_KEYWORDS.search(val):
+                company_name = val
+            if not date_str and _DATE_FORMATS.search(val):
+                m = _DATE_FORMATS.search(val)
+                if m:
+                    date_str = m.group(1)
+
+    # Find amount column and vendor column by scanning header row
+    header_row_idx = None
+    vendor_col = None
+    amount_col = None
+    for r_idx, row in enumerate(ws.iter_rows(min_row=1, max_row=10, values_only=True), 1):
+        for c_idx, cell in enumerate(row, 1):
+            if not cell:
+                continue
+            val = str(cell).lower().strip()
+            if any(k in val for k in ["vendor", "supplier", "ผู้รับเงิน", "บริษัท", "ชื่อ", "name", "company"]):
+                vendor_col = c_idx
+                header_row_idx = r_idx
+            if any(k in val for k in ["amount", "จำนวน", "เงิน", "total", "sum"]):
+                amount_col = c_idx
+                header_row_idx = r_idx
+
+    if not header_row_idx:
+        header_row_idx = 1
+
+    # If columns not found by header, scan first rows for number patterns
+    if not amount_col or not vendor_col:
+        for r_idx, row in enumerate(ws.iter_rows(min_row=(header_row_idx or 1) + 1,
+                                                   max_row=(header_row_idx or 1) + 5,
+                                                   values_only=True),
+                                    (header_row_idx or 1) + 1):
+            for c_idx, cell in enumerate(row, 1):
+                if cell is None:
+                    continue
+                try:
+                    v = float(str(cell).replace(",", ""))
+                    if v > 100 and not amount_col:
+                        amount_col = c_idx
+                except (ValueError, TypeError):
+                    if not vendor_col and str(cell).strip():
+                        vendor_col = c_idx
+
+    summary_rows = []
+    row_idx = 0
+    for row in ws.iter_rows(min_row=(header_row_idx or 1) + 1, values_only=True):
+        vendor_val = row[vendor_col - 1] if vendor_col and len(row) >= vendor_col else None
+        amount_val = row[amount_col - 1] if amount_col and len(row) >= amount_col else None
+        if not vendor_val or not amount_val:
+            continue
+        try:
+            amount = float(str(amount_val).replace(",", ""))
+        except (ValueError, TypeError):
+            continue
+        if amount <= 0:
+            continue
+        vendor = str(vendor_val).strip()
+        if not vendor:
+            continue
+        summary_rows.append({
+            "row_idx": row_idx,
+            "vendor":  vendor,
+            "amount":  amount,
+        })
+        row_idx += 1
+
+    # Fallback company from file name
+    if not company_name:
+        company_name = os.path.splitext(os.path.basename(excel_path))[0]
+
+    return summary_rows, company_name, date_str
 
 
 # ── OCR helpers ───────────────────────────────────────────────────────────────
@@ -178,17 +276,34 @@ def _best_vendor(lines: list, amount_idx: int,
 
 
 # ── Summary parser ────────────────────────────────────────────────────────────
-def parse_summary(text: str, ca_amounts: list[float]) -> list[dict]:
+def parse_summary(text: str, ca_amounts: list[float],
+                  prefilled_rows: list[dict] | None = None) -> list[dict]:
+    # Excel mode: rows already parsed, just assign row_idx by matching amounts
+    if prefilled_rows is not None:
+        seen: set[float] = set()
+        result = []
+        for ca_amt in ca_amounts:
+            best = min(prefilled_rows, key=lambda r: abs(r["amount"] - ca_amt), default=None)
+            if best and abs(best["amount"] - ca_amt) < 1.0 and ca_amt not in seen:
+                seen.add(ca_amt)
+                result.append({
+                    "row_idx": len(result) + 1,
+                    "vendor":  best["vendor"],
+                    "amount":  ca_amt,
+                })
+        return result
+
+    # PDF mode: OCR text
     lines    = text.splitlines()
     rows     = []
-    seen: set[float] = set()
+    seen2: set[float] = set()
     all_set  = set(ca_amounts)
 
     for line_idx, line in enumerate(lines):
         for raw in NUM_RE.findall(line):
             amt = float(raw.replace(",", ""))
-            if amt in all_set and amt not in seen:
-                seen.add(amt)
+            if amt in all_set and amt not in seen2:
+                seen2.add(amt)
                 vendor = _best_vendor(lines, line_idx, list(all_set), amt)
                 rows.append({
                     "row_idx": len(rows) + 1,
@@ -348,22 +463,30 @@ def extract_company_and_date(summary_text: str,
 def split_pdf(doc: fitz.Document, assignments: list[int | None],
               summary_rows: list[dict], base_out_dir: str,
               page_infos: list[dict],
-              summary_text: str = "") -> tuple[list[dict], str]:
+              summary_text: str = "",
+              excel_company: str = "",
+              excel_date: str = "") -> tuple[list[dict], str]:
     """
     Split doc into named PDF files inside:
         Payment_[CompanyName]_[Date]/
     Returns (results, out_dir).
     """
-    company_safe, date_safe = extract_company_and_date(summary_text, page_infos, doc)
+    if excel_company:
+        company_safe = re.sub(r"[\\/:*?\"<>|()\[\],. ]+", "_", excel_company).strip("_")
+        date_safe    = re.sub(r"[\/\-\.]", "-", excel_date) if excel_date else \
+                       __import__("datetime").date.today().strftime("%d-%m-%Y")
+    else:
+        company_safe, date_safe = extract_company_and_date(summary_text, page_infos, doc)
     root_folder = f"Payment_{company_safe}_{date_safe}"
     out_dir     = os.path.join(base_out_dir, root_folder)
     os.makedirs(out_dir, exist_ok=True)
 
-    # Save page 1 (summary table) as summary.pdf
-    summary_pdf = fitz.open()
-    summary_pdf.insert_pdf(doc, from_page=0, to_page=0)
-    summary_pdf.save(os.path.join(out_dir, "summary.pdf"))
-    summary_pdf.close()
+    # Save page 1 as summary.pdf only in PDF mode (not Excel mode)
+    if not excel_company:
+        summary_pdf = fitz.open()
+        summary_pdf.insert_pdf(doc, from_page=0, to_page=0)
+        summary_pdf.save(os.path.join(out_dir, "summary.pdf"))
+        summary_pdf.close()
 
     # Group pages by row
     row_pages: dict[int, list[int]] = {}
@@ -438,6 +561,7 @@ class App(tk.Tk):
         self.resizable(False, False)
         self.configure(bg="#F0F4F8")
         self._pdf_path     = None
+        self._excel_path   = None
         self._summary_text = ""
         self._build_ui()
         self._center()
@@ -473,26 +597,42 @@ class App(tk.Tk):
                   font=("Calibri", 10), bg="#1F4E79", fg="white",
                   relief="flat", padx=10).grid(row=0, column=2)
 
+        # Excel row (optional)
+        tk.Label(body, text="Excel Summary\n(optional):", font=("Calibri", 11, "bold"),
+                 bg="#F0F4F8").grid(row=1, column=0, sticky="w", pady=6)
+        self._excel_lbl = tk.Label(body, text="Not selected  (will use page 1 of PDF)",
+                                    font=("Calibri", 10), bg="#F0F4F8", fg="#888",
+                                    width=46, anchor="w")
+        self._excel_lbl.grid(row=1, column=1, padx=8)
+        xbtn_frame = tk.Frame(body, bg="#F0F4F8")
+        xbtn_frame.grid(row=1, column=2)
+        tk.Button(xbtn_frame, text="Browse…", command=self._pick_excel,
+                  font=("Calibri", 10), bg="#2E7D32", fg="white",
+                  relief="flat", padx=10).pack(side="left")
+        tk.Button(xbtn_frame, text="✕", command=self._clear_excel,
+                  font=("Calibri", 10), bg="#888", fg="white",
+                  relief="flat", padx=6).pack(side="left", padx=(4, 0))
+
         # Output row
         tk.Label(body, text="Output Folder:", font=("Calibri", 11, "bold"),
-                 bg="#F0F4F8").grid(row=1, column=0, sticky="w", pady=6)
+                 bg="#F0F4F8").grid(row=2, column=0, sticky="w", pady=6)
         self._out_lbl = tk.Label(body, text="No folder selected",
                                   font=("Calibri", 10), bg="#F0F4F8", fg="#666",
                                   width=46, anchor="w")
-        self._out_lbl.grid(row=1, column=1, padx=8)
+        self._out_lbl.grid(row=2, column=1, padx=8)
         tk.Button(body, text="Browse…", command=self._pick_out,
                   font=("Calibri", 10), bg="#1F4E79", fg="white",
-                  relief="flat", padx=10).grid(row=1, column=2)
+                  relief="flat", padx=10).grid(row=2, column=2)
 
         # Progress
         self._prog_var = tk.DoubleVar()
         self._prog_bar = ttk.Progressbar(body, variable=self._prog_var,
                                           maximum=100, length=460)
-        self._prog_bar.grid(row=2, column=0, columnspan=3, pady=(18, 4))
+        self._prog_bar.grid(row=3, column=0, columnspan=3, pady=(18, 4))
 
         self._status_lbl = tk.Label(body, text="Ready.",
                                      font=("Calibri", 9), bg="#F0F4F8", fg="#555")
-        self._status_lbl.grid(row=3, column=0, columnspan=3)
+        self._status_lbl.grid(row=4, column=0, columnspan=3)
 
         # Run button
         self._btn = tk.Button(body, text="▶  Analyse & Split",
@@ -500,7 +640,7 @@ class App(tk.Tk):
                                bg="#1F4E79", fg="white", relief="flat",
                                padx=24, pady=10, cursor="hand2",
                                command=self._run)
-        self._btn.grid(row=4, column=0, columnspan=3, pady=(20, 4))
+        self._btn.grid(row=5, column=0, columnspan=3, pady=(20, 4))
 
     def _pick_pdf(self):
         p = filedialog.askopenfilename(
@@ -508,6 +648,18 @@ class App(tk.Tk):
         if p:
             self._pdf_path = p
             self._pdf_lbl.config(text=os.path.basename(p), fg="#1F4E79")
+
+    def _pick_excel(self):
+        p = filedialog.askopenfilename(
+            title="Select Excel Summary",
+            filetypes=[("Excel files", "*.xlsx *.xls")])
+        if p:
+            self._excel_path = p
+            self._excel_lbl.config(text=os.path.basename(p), fg="#2E7D32")
+
+    def _clear_excel(self):
+        self._excel_path = None
+        self._excel_lbl.config(text="Not selected  (will use page 1 of PDF)", fg="#888")
 
     def _pick_out(self):
         d = filedialog.askdirectory(title="Select output folder")
@@ -541,37 +693,76 @@ class App(tk.Tk):
             self._status(f"Opened PDF — {n} pages")
             self._prog(0)
 
-            # Step 1: OCR summary page
-            self._status("Reading summary page (page 1)…")
-            summary_text = ocr_page(doc, 0)
-            self._prog(5)
+            excel_path = self._excel_path
+            summary_text = ""
 
-            # Step 2: OCR all content pages
-            page_infos: list[dict] = []
-            for i in range(1, n):
-                self._status(f"Scanning page {i+1} / {n}…")
-                text = ocr_page(doc, i)
-                info = classify_page(text)
-                page_infos.append(info)
-                self._prog(5 + int(75 * i / max(n - 1, 1)))
+            if excel_path:
+                # ── Excel mode: all PDF pages are invoices ──
+                self._status("Reading summary from Excel…")
+                summary_rows_pre, company_from_excel, date_from_excel = \
+                    parse_summary_from_excel(excel_path)
+                self._prog(5)
 
-            # Step 3: Re-parse summary using confirmed CA amounts
-            ca_amounts = [
-                info["payment_amount"]
-                for info in page_infos
-                if info["is_credit_advice"] and info["payment_amount"]
-            ]
-            if not ca_amounts:
-                self.after(0, lambda: messagebox.showerror(
-                    "Error",
-                    "No payment confirmation pages found.\n"
-                    "Make sure pages 2+ contain Credit Advice or Success transfer pages."
-                ))
-                return
+                page_infos: list[dict] = []
+                for i in range(0, n):
+                    self._status(f"Scanning page {i+1} / {n}…")
+                    text = ocr_page(doc, i)
+                    info = classify_page(text)
+                    page_infos.append(info)
+                    self._prog(5 + int(75 * (i + 1) / n))
 
-            self._status("Parsing summary rows…")
-            summary_rows = parse_summary(summary_text, ca_amounts)
-            self._prog(82)
+                ca_amounts = [
+                    info["payment_amount"]
+                    for info in page_infos
+                    if info["is_credit_advice"] and info["payment_amount"]
+                ]
+                if not ca_amounts:
+                    self.after(0, lambda: messagebox.showerror(
+                        "Error",
+                        "No payment confirmation pages found.\n"
+                        "Make sure the PDF contains Credit Advice or Success transfer pages."
+                    ))
+                    return
+
+                summary_rows = parse_summary(summary_text, ca_amounts,
+                                             prefilled_rows=summary_rows_pre)
+                self._prog(82)
+                # store company/date for split_pdf
+                self._excel_company = company_from_excel
+                self._excel_date    = date_from_excel
+
+            else:
+                # ── PDF mode: page 1 = summary scan ──
+                self._status("Reading summary page (page 1)…")
+                summary_text = ocr_page(doc, 0)
+                self._prog(5)
+
+                page_infos: list[dict] = []
+                for i in range(1, n):
+                    self._status(f"Scanning page {i+1} / {n}…")
+                    text = ocr_page(doc, i)
+                    info = classify_page(text)
+                    page_infos.append(info)
+                    self._prog(5 + int(75 * i / max(n - 1, 1)))
+
+                ca_amounts = [
+                    info["payment_amount"]
+                    for info in page_infos
+                    if info["is_credit_advice"] and info["payment_amount"]
+                ]
+                if not ca_amounts:
+                    self.after(0, lambda: messagebox.showerror(
+                        "Error",
+                        "No payment confirmation pages found.\n"
+                        "Make sure pages 2+ contain Credit Advice or Success transfer pages."
+                    ))
+                    return
+
+                self._status("Parsing summary rows…")
+                summary_rows = parse_summary(summary_text, ca_amounts)
+                self._prog(82)
+                self._excel_company = ""
+                self._excel_date    = ""
 
             # Step 4: Assign pages to rows
             self._status("Assigning pages to summary rows…")
@@ -672,7 +863,9 @@ class App(tk.Tk):
             self._prog(88)
             results, payment_dir = split_pdf(
                 doc, assignments, summary_rows, out_dir,
-                page_infos, summary_text=self._summary_text)
+                page_infos, summary_text=self._summary_text,
+                excel_company=getattr(self, "_excel_company", ""),
+                excel_date=getattr(self, "_excel_date", ""))
             self._prog(100)
 
             n_match    = sum(1 for r in results if r["match_status"] == "MATCH")

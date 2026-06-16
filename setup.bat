@@ -92,7 +92,7 @@ echo [3/4] מעדכן pip...
 
 echo.
 echo [4/4] מתקין ספריות Python...
-"!PYTHON!" -m pip install pymupdf pytesseract pillow numpy --quiet
+"!PYTHON!" -m pip install pymupdf pytesseract pillow numpy openpyxl --quiet
 if %errorlevel% neq 0 ( echo שגיאה בהתקנת ספריות. & pause & exit /b 1 )
 echo [OK] ספריות מותקנות.
 
@@ -136,7 +136,7 @@ pause
 echo.
 echo [2/2] מעדכן ספריות Python...
 "!PYTHON!" -m pip install --upgrade pip --quiet
-"!PYTHON!" -m pip install --upgrade pymupdf pytesseract pillow numpy --quiet
+"!PYTHON!" -m pip install --upgrade pymupdf pytesseract pillow numpy openpyxl --quiet
 if %errorlevel% neq 0 ( echo שגיאה בעדכון ספריות. & pause & exit /b 1 )
 echo [OK] ספריות עודכנו.
 
@@ -155,7 +155,7 @@ if exist "C:\Program Files\Tesseract-OCR\tesseract.exe" (
 ) else (
     echo [WARN] Tesseract לא נמצא - OCR לא יעבוד.
 )
-"!PYTHON!" -c "import fitz, pytesseract, PIL, numpy, tkinter; print('[OK] כל הספריות מוכנות.')"
+"!PYTHON!" -c "import fitz, pytesseract, PIL, numpy, openpyxl, tkinter; print('[OK] All libraries ready.')"
 if %errorlevel% neq 0 ( echo [FAIL] ספריות חסרות. & pause & exit /b 1 )
 
 echo.
