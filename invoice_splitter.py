@@ -86,26 +86,36 @@ def parse_summary_from_excel(excel_path: str) -> tuple[list[dict], str, str]:
 
     all_rows = list(ws.iter_rows(values_only=True))
 
-    # ── Company name & date from row 1 ────────────────────────────────────────
+    # ── Company name & date: scan first 5 non-empty rows ─────────────────────
+    import datetime as _dt
     company_name = ""
     date_str     = ""
-    if all_rows:
-        for cell in all_rows[0]:
+    for row in all_rows[:10]:
+        if not any(c is not None for c in row):
+            continue
+        for cell in row:
             if cell is None:
                 continue
-            import datetime as _dt
             if isinstance(cell, _dt.datetime):
-                date_str = cell.strftime("%d/%m/%Y")
+                if not date_str:
+                    date_str = cell.strftime("%d/%m/%Y")
                 continue
             val = str(cell).strip()
             if not val:
                 continue
-            if not company_name and _COMPANY_KEYWORDS.search(val):
-                company_name = val
+            if not company_name:
+                val_low = val.lower()
+                if any(k in val_low for k in [
+                    "co.,ltd", "co., ltd", "co,ltd", "holding", "limited",
+                    "corporation", "corp", "pte", "inc", "llc", "company"
+                ]):
+                    company_name = val
             if not date_str:
                 m = _DATE_FORMATS.search(val)
                 if m:
                     date_str = m.group(1)
+        if company_name and date_str:
+            break
 
     # ── Find data rows: row where col B is a positive integer (item number) ───
     # Columns (0-based): B=1, C=2, D=3, E=4, F=5, G=6, H=7
