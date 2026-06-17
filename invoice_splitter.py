@@ -335,6 +335,10 @@ def parse_summary(text: str, ca_amounts: list[float],
         return [dict(r) for r in prefilled_rows]
 
     # PDF mode: OCR text
+    _DEDUCTION_VENDOR_RE = re.compile(
+        r"\b(less|advance|retention|wht|withholding|k[\-\s]?bank|kasikorn|"
+        r"vat|tax\s+ded|deduct)\b", re.IGNORECASE)
+
     lines    = text.splitlines()
     rows     = []
     seen2: set[float] = set()
@@ -346,6 +350,11 @@ def parse_summary(text: str, ca_amounts: list[float],
             if amt in all_set and amt not in seen2:
                 seen2.add(amt)
                 vendor = _best_vendor(lines, line_idx, list(all_set), amt)
+                # Skip deduction lines (Less Advance, WHT, K-bank, etc.)
+                if _DEDUCTION_VENDOR_RE.search(vendor):
+                    continue
+                if not vendor:
+                    continue
                 rows.append({
                     "row_idx": len(rows) + 1,
                     "vendor":  vendor,
@@ -916,14 +925,20 @@ class App(tk.Tk):
                 summary_text = ocr_page(doc, 0)
                 self._prog(5)
 
-                # Pre-extract all significant amounts from the summary page.
-                # These are used in the second pass so EVERY vendor gets an anchor
-                # even if their payment page has no banking keywords.
-                all_summary_amounts = {
-                    round(float(x.replace(",", "")), 2)
-                    for x in NUM_RE.findall(summary_text)
-                    if float(x.replace(",", "")) > 5000
-                }
+                # Pre-extract payment amounts from non-deduction lines of the summary.
+                # Skip lines that contain deduction keywords (Less, K-bank, WHT, etc.)
+                # so only the actual transfer amounts are used as anchors.
+                _DEDUCTION_LINE_RE = re.compile(
+                    r"\b(less|advance|retention|wht|withholding|k[\-\s]?bank|"
+                    r"kasikorn|vat\s+\d|tax\s+\d)\b", re.IGNORECASE)
+                all_summary_amounts = set()
+                for _sl in summary_text.splitlines():
+                    if _DEDUCTION_LINE_RE.search(_sl):
+                        continue
+                    for _sx in NUM_RE.findall(_sl):
+                        _sv = float(_sx.replace(",", ""))
+                        if _sv > 5000:
+                            all_summary_amounts.add(round(_sv, 2))
 
                 page_infos: list[dict] = []
                 for i in range(1, n):
