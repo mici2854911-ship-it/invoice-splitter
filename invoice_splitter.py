@@ -47,10 +47,13 @@ LANG        = "eng+tha"
 NUM_RE        = re.compile(r"\b(\d{1,3}(?:,\d{3})*\.\d{2})\b")
 CREDIT_ADV_RE = re.compile(r"credit\s+advice", re.IGNORECASE)
 SUCCESS_RE    = re.compile(r"\bsuccess\b", re.IGNORECASE)
+PAYMENT_INSTR_RE = re.compile(
+    r"payment\s+instruction|beneficiary\s+name|debit\s+branch|internal\s+ref\s+no",
+    re.IGNORECASE)
 PMT_AMT_RE    = re.compile(
-    r"payment\s+amount\s*[:\-]?\s*([\d,]+\.\d{2})", re.IGNORECASE)
+    r"payment\s+amount\s*[:\-]?\s*(?:[A-Z]{2,3}\s*)?([\d,]+\.\d{2})", re.IGNORECASE)
 AMOUNT_RE     = re.compile(
-    r"(?<!\w)amount\s*[:\-]?\s*([\d,]+\.\d{2})", re.IGNORECASE)
+    r"(?<!\w)amount\s*[:\-]?\s*(?:[A-Z]{2,3}\s*)?([\d,]+\.\d{2})", re.IGNORECASE)
 
 _COMPANY_KEYWORDS = re.compile(
     r"\b(co\.?,?\s*ltd\.?|company|corporation|corp\.?|public|co\.,ltd|pte\.?|inc\.?|llc|limited|holding)\b",
@@ -180,12 +183,23 @@ def _ocr_header_cell(doc: fitz.Document) -> str:
 
 # ── Page classifier ───────────────────────────────────────────────────────────
 def classify_page(text: str) -> dict:
-    is_ca       = bool(CREDIT_ADV_RE.search(text)) or bool(SUCCESS_RE.search(text))
+    is_ca       = (bool(CREDIT_ADV_RE.search(text)) or
+                   bool(SUCCESS_RE.search(text)) or
+                   bool(PAYMENT_INSTR_RE.search(text)))
     pmt_amount  = None
     if is_ca:
         m = PMT_AMT_RE.search(text) or AMOUNT_RE.search(text)
         if m:
             pmt_amount = float(m.group(1).replace(",", ""))
+
+    # all amounts (computed early so we can use as fallback for pmt_amount)
+    all_amounts_early = [float(x.replace(",", "")) for x in NUM_RE.findall(text)]
+
+    # Fallback: anchor page but no amount found by regex → use largest amount
+    if is_ca and pmt_amount is None and all_amounts_early:
+        large = [a for a in all_amounts_early if a > 1000]
+        if large:
+            pmt_amount = max(large)
 
     # beneficiary
     beneficiary = ""
@@ -362,13 +376,23 @@ def assign_pages(summary_rows: list[dict],
     from collections import Counter
     amt_counts = Counter(round(r["amount"], 2) for r in summary_rows)
 
+    def _fuzzy_match(page_amt: float, row_amt: float) -> bool:
+        """Exact match, or 1-digit OCR error in large amounts (same string length, 1 char diff)."""
+        if abs(page_amt - row_amt) < 0.02:
+            return True
+        if page_amt > 10000 and row_amt > 10000:
+            sa, sb = f"{page_amt:,.2f}", f"{row_amt:,.2f}"
+            if len(sa) == len(sb):
+                return sum(x != y for x, y in zip(sa, sb)) <= 1
+        return False
+
     # build map: abs_page_idx → row_idx  for CA anchors
     ca_map: dict[int, int] = {}
     for abs_idx, info in enumerate(page_infos):
         if info["is_credit_advice"] and info["payment_amount"] is not None:
             page_text = info.get("raw_text", "")
             candidates = [r for r in summary_rows
-                          if abs(info["payment_amount"] - r["amount"]) < 0.02]
+                          if _fuzzy_match(info["payment_amount"], r["amount"])]
             if not candidates:
                 continue
             if len(candidates) == 1:
@@ -944,6 +968,18 @@ class App(tk.Tk):
 
                 self._status("Parsing summary rows…")
                 summary_rows = parse_summary(summary_text, ca_amounts)
+
+                # Second pass: mark non-anchor pages that contain a summary amount
+                # (e.g. invoices/receipts that have no banking keywords but right amount)
+                summary_amounts_set = {round(r["amount"], 2) for r in summary_rows}
+                for info in page_infos:
+                    if not info["is_credit_advice"]:
+                        for amt in info["all_amounts"]:
+                            if round(amt, 2) in summary_amounts_set:
+                                info["is_credit_advice"] = True
+                                info["payment_amount"]   = amt
+                                break
+
                 self._prog(82)
                 self._excel_company = ""
                 self._excel_date    = ""
