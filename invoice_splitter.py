@@ -861,8 +861,8 @@ class App(tk.Tk):
 
         except Exception as exc:
             import traceback
-            self.after(0, lambda: messagebox.showerror("Error",
-                f"{exc}\n\n{traceback.format_exc()[-600:]}"))
+            _msg = f"{exc}\n\n{traceback.format_exc()[-600:]}"
+            self.after(0, lambda m=_msg: messagebox.showerror("Error", m))
             self.after(0, lambda: self._btn.config(state="normal"))
 
     # ── preview dialog ────────────────────────────────────────────────────────
@@ -971,8 +971,8 @@ class App(tk.Tk):
 
         except Exception as exc:
             import traceback
-            self.after(0, lambda: messagebox.showerror(
-                "Error", f"{exc}\n\n{traceback.format_exc()[-600:]}"))
+            _msg = f"{exc}\n\n{traceback.format_exc()[-600:]}"
+            self.after(0, lambda m=_msg: messagebox.showerror("Error", m))
         finally:
             self.after(0, lambda: self._btn.config(state="normal"))
 
