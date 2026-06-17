@@ -53,7 +53,7 @@ AMOUNT_RE     = re.compile(
     r"(?<!\w)amount\s*[:\-]?\s*([\d,]+\.\d{2})", re.IGNORECASE)
 
 _COMPANY_KEYWORDS = re.compile(
-    r"\b(co\.?,?\s*ltd\.?|company|corporation|corp\.?|public|co\.,ltd|pte\.?|inc\.?|llc)\b",
+    r"\b(co\.?,?\s*ltd\.?|company|corporation|corp\.?|public|co\.,ltd|pte\.?|inc\.?|llc|limited|holding)\b",
     re.IGNORECASE,
 )
 _DATE_FORMATS = re.compile(r"\b(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4})\b")
@@ -261,8 +261,42 @@ def _extract_vendor(line: str) -> str:
     return best_seg(segments)
 
 
+_NOISE_WORDS = re.compile(
+    r"^(advice|credit|debit|transfer|payment|invoice|trf|adv|no\.?|ref\.?)\s+",
+    re.IGNORECASE)
+
+
+def _vendor_from_same_line(line: str) -> str:
+    """Extract vendor name when vendor and amount appear on the same OCR line."""
+    m = _COMPANY_KEYWORDS.search(line)
+    if m:
+        prefix = line[:m.end()]
+        # strip leading row-number digits and punctuation
+        prefix = re.sub(r"^[\d\s\W]+", "", prefix).strip(" -:.,|[]")
+        # strip common non-name noise words that OCR picks up from adjacent columns
+        while _NOISE_WORDS.match(prefix):
+            prefix = _NOISE_WORDS.sub("", prefix).strip()
+        if len(prefix) >= 3:
+            return prefix[:80]
+    # No company keyword: take text before the first large amount pattern
+    m2 = re.search(r"\b\d{1,3}(?:,\d{3})+\.\d{2}\b", line)
+    if m2:
+        candidate = line[:m2.start()].strip()
+        candidate = re.sub(r"^[\d\s\W]+", "", candidate).strip(" -:.,|=[]")
+        while _NOISE_WORDS.match(candidate):
+            candidate = _NOISE_WORDS.sub("", candidate).strip()
+        if len(candidate) >= 3:
+            return candidate[:80]
+    return ""
+
+
 def _best_vendor(lines: list, amount_idx: int,
                  all_amounts: list[float], target: float) -> str:
+    # Priority 0: vendor and amount on the same OCR line (common in scanned tables)
+    same_line_vendor = _vendor_from_same_line(lines[amount_idx])
+    if same_line_vendor:
+        return same_line_vendor
+
     # Look back up to 3 lines
     for offset in range(1, 4):
         idx = amount_idx - offset
@@ -275,7 +309,7 @@ def _best_vendor(lines: list, amount_idx: int,
         v = _extract_vendor(lines[idx])
         if v:
             return v
-    # fallback: same line
+    # fallback: same line generic extraction
     return _extract_vendor(lines[amount_idx])
 
 
