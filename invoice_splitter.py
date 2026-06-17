@@ -925,20 +925,34 @@ class App(tk.Tk):
                 summary_text = ocr_page(doc, 0)
                 self._prog(5)
 
-                # Pre-extract payment amounts from non-deduction lines of the summary.
-                # Skip lines that contain deduction keywords (Less, K-bank, WHT, etc.)
-                # so only the actual transfer amounts are used as anchors.
+                # Pre-extract TRANSFER amounts from summary.
+                # Pattern in scanned tables: the actual payment appears TWICE on the same
+                # line (e.g. "3,320,370.43  3,320,370.43  Trf. 1"), while the gross invoice
+                # amount appears only once.  Pick amounts that repeat; skip deduction lines.
                 _DEDUCTION_LINE_RE = re.compile(
                     r"\b(less|advance|retention|wht|withholding|k[\-\s]?bank|"
                     r"kasikorn|vat\s+\d|tax\s+\d)\b", re.IGNORECASE)
-                all_summary_amounts = set()
+                all_summary_amounts: set[float] = set()
                 for _sl in summary_text.splitlines():
                     if _DEDUCTION_LINE_RE.search(_sl):
                         continue
-                    for _sx in NUM_RE.findall(_sl):
-                        _sv = float(_sx.replace(",", ""))
-                        if _sv > 5000:
-                            all_summary_amounts.add(round(_sv, 2))
+                    _line_vals = [float(x.replace(",", "")) for x in NUM_RE.findall(_sl)]
+                    _seen_once: set[float] = set()
+                    for _v in _line_vals:
+                        if _v > 5000:
+                            _rv = round(_v, 2)
+                            if _rv in _seen_once:          # appears ≥ twice → transfer amt
+                                all_summary_amounts.add(_rv)
+                            _seen_once.add(_rv)
+                # Fallback: no repeated amounts found (simpler doc format)
+                if not all_summary_amounts:
+                    for _sl in summary_text.splitlines():
+                        if _DEDUCTION_LINE_RE.search(_sl):
+                            continue
+                        for _sx in NUM_RE.findall(_sl):
+                            _sv = float(_sx.replace(",", ""))
+                            if _sv > 5000:
+                                all_summary_amounts.add(round(_sv, 2))
 
                 page_infos: list[dict] = []
                 for i in range(1, n):
