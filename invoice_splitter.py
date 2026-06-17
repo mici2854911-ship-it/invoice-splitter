@@ -487,10 +487,22 @@ def _excel_to_pdf(excel_path: str, pdf_path: str):
     """Export the first Excel sheet directly to PDF using Office COM."""
     import subprocess, tempfile
 
-    # Ensure output directory exists
-    os.makedirs(os.path.dirname(pdf_path), exist_ok=True)
+    abs_excel = os.path.abspath(excel_path)
+    abs_pdf   = os.path.abspath(pdf_path)
 
-    # Pass paths via environment variables to avoid any escaping issues
+    # Ensure output directory exists
+    os.makedirs(os.path.dirname(abs_pdf), exist_ok=True)
+
+    # Remove any pre-existing PDF so Excel won't fail on a locked file
+    if os.path.exists(abs_pdf):
+        try:
+            os.remove(abs_pdf)
+        except Exception:
+            pass
+
+    # Pass paths via env vars (avoids all escaping issues with spaces/parens).
+    # Open read-only — works even when the file is already open in Excel.
+    # Export at workbook level — more reliable than worksheet level.
     script = (
         "$ErrorActionPreference = 'Stop'\n"
         "$ep = $env:_XL_SRC\n"
@@ -499,8 +511,8 @@ def _excel_to_pdf(excel_path: str, pdf_path: str):
         "$xl.Visible = $false\n"
         "$xl.DisplayAlerts = $false\n"
         "try {\n"
-        "    $wb = $xl.Workbooks.Open($ep)\n"
-        "    $wb.Worksheets(1).ExportAsFixedFormat(0, $pp)\n"
+        "    $wb = $xl.Workbooks.Open($ep, 0, $true)\n"
+        "    $wb.ExportAsFixedFormat(0, $pp)\n"
         "    $wb.Close($false)\n"
         "} finally {\n"
         "    $xl.Quit()\n"
@@ -515,16 +527,15 @@ def _excel_to_pdf(excel_path: str, pdf_path: str):
     ps1.close()
 
     env = os.environ.copy()
-    env["_XL_SRC"] = excel_path
-    env["_XL_DST"] = pdf_path
+    env["_XL_SRC"] = abs_excel
+    env["_XL_DST"] = abs_pdf
 
     try:
         result = subprocess.run(
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1name],
             capture_output=True, timeout=60, text=True, env=env)
-        if not os.path.exists(pdf_path):
-            raise RuntimeError(
-                f"summary.pdf not created.\nSTDOUT: {result.stdout[:200]}\nSTDERR: {result.stderr[:300]}")
+        if not os.path.exists(abs_pdf):
+            raise RuntimeError(f"summary.pdf not created.\nSTDERR: {result.stderr[:400]}")
     finally:
         try:
             os.remove(ps1name)
