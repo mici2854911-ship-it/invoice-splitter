@@ -691,7 +691,7 @@ class App(tk.Tk):
                   relief="flat", padx=6).pack(side="left", padx=(4, 0))
 
         # Excel row (optional)
-        tk.Label(body, text="Excel Summary\n(optional):", font=("Calibri", 11, "bold"),
+        tk.Label(body, text="Excel Summary\n(required for\nmulti-PDF):", font=("Calibri", 11, "bold"),
                  bg="#F0F4F8").grid(row=1, column=0, sticky="w", pady=6)
         self._excel_lbl = tk.Label(body, text="Not selected  (will use page 1 of PDF)",
                                     font=("Calibri", 10), bg="#F0F4F8", fg="#888",
@@ -782,6 +782,12 @@ class App(tk.Tk):
             return
         if not hasattr(self, "_out_dir") or not self._out_dir:
             messagebox.showwarning("Missing", "Please select an output folder.")
+            return
+        if len(self._pdf_paths) > 1 and not self._excel_path:
+            messagebox.showwarning(
+                "Excel Required",
+                "When uploading multiple PDF files, you must also select the Excel summary file.\n\n"
+                "The Excel file tells the app which vendors and amounts to look for.")
             return
         self._btn.config(state="disabled")
         threading.Thread(
