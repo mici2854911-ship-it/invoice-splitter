@@ -643,10 +643,10 @@ def split_pdf(doc: fitz.Document, assignments: list[int | None],
         summary_pdf.save(os.path.join(out_dir, "summary.pdf"))
         summary_pdf.close()
 
-    # Group pages by row
+    # Group pages by row (skip page 0 — already saved as summary.pdf)
     row_pages: dict[int, list[int]] = {}
     for abs_idx, row_idx in enumerate(assignments):
-        if row_idx is None:
+        if row_idx is None or abs_idx == 0:
             continue
         row_pages.setdefault(row_idx, []).append(abs_idx)
 
