@@ -870,11 +870,40 @@ class App(tk.Tk):
                     for info in page_infos
                     if info["is_credit_advice"] and info["payment_amount"]
                 ]
+
+                # Fallback: no keyword pages found — match by amounts from summary
+                if not ca_amounts:
+                    self._status("No keyword pages found — trying amount-based matching…")
+                    summary_rows_pre = parse_summary(summary_text, [])
+                    if not summary_rows_pre:
+                        # Extract all amounts from summary text as candidates
+                        summary_amounts = {
+                            round(float(x.replace(",", "")), 2)
+                            for x in NUM_RE.findall(summary_text)
+                        }
+                    else:
+                        summary_amounts = {round(r["amount"], 2) for r in summary_rows_pre}
+
+                    for info in page_infos:
+                        if not info["is_credit_advice"]:
+                            for amt in info["all_amounts"]:
+                                if summary_amounts and round(amt, 2) in summary_amounts:
+                                    info["is_credit_advice"] = True
+                                    info["payment_amount"]   = amt
+                                    break
+
+                    ca_amounts = [
+                        info["payment_amount"]
+                        for info in page_infos
+                        if info["is_credit_advice"] and info["payment_amount"]
+                    ]
+
                 if not ca_amounts:
                     self.after(0, lambda: messagebox.showerror(
                         "Error",
                         "No payment confirmation pages found.\n"
-                        "Make sure pages 2+ contain Credit Advice or Success transfer pages."
+                        "Make sure pages 2+ contain Credit Advice, Success transfer pages,\n"
+                        "or amounts matching the summary table."
                     ))
                     return
 
