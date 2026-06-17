@@ -916,6 +916,15 @@ class App(tk.Tk):
                 summary_text = ocr_page(doc, 0)
                 self._prog(5)
 
+                # Pre-extract all significant amounts from the summary page.
+                # These are used in the second pass so EVERY vendor gets an anchor
+                # even if their payment page has no banking keywords.
+                all_summary_amounts = {
+                    round(float(x.replace(",", "")), 2)
+                    for x in NUM_RE.findall(summary_text)
+                    if float(x.replace(",", "")) > 5000
+                }
+
                 page_infos: list[dict] = []
                 for i in range(1, n):
                     self._status(f"Scanning page {i+1} / {n}…")
@@ -924,38 +933,29 @@ class App(tk.Tk):
                     page_infos.append(info)
                     self._prog(5 + int(75 * i / max(n - 1, 1)))
 
+                # First pass ca_amounts (keyword-detected anchors)
                 ca_amounts = [
                     info["payment_amount"]
                     for info in page_infos
                     if info["is_credit_advice"] and info["payment_amount"]
                 ]
 
-                # Fallback: no keyword pages found — match by amounts from summary
-                if not ca_amounts:
-                    self._status("No keyword pages found — trying amount-based matching…")
-                    summary_rows_pre = parse_summary(summary_text, [])
-                    if not summary_rows_pre:
-                        # Extract all amounts from summary text as candidates
-                        summary_amounts = {
-                            round(float(x.replace(",", "")), 2)
-                            for x in NUM_RE.findall(summary_text)
-                        }
-                    else:
-                        summary_amounts = {round(r["amount"], 2) for r in summary_rows_pre}
+                # Second pass: mark any page whose amount matches a summary amount.
+                # Uses all_summary_amounts so all vendors get anchors regardless
+                # of whether their pages have banking keywords.
+                for info in page_infos:
+                    if not info["is_credit_advice"]:
+                        for amt in info["all_amounts"]:
+                            if round(amt, 2) in all_summary_amounts:
+                                info["is_credit_advice"] = True
+                                info["payment_amount"]   = amt
+                                break
 
-                    for info in page_infos:
-                        if not info["is_credit_advice"]:
-                            for amt in info["all_amounts"]:
-                                if summary_amounts and round(amt, 2) in summary_amounts:
-                                    info["is_credit_advice"] = True
-                                    info["payment_amount"]   = amt
-                                    break
-
-                    ca_amounts = [
-                        info["payment_amount"]
-                        for info in page_infos
-                        if info["is_credit_advice"] and info["payment_amount"]
-                    ]
+                ca_amounts = list({
+                    info["payment_amount"]
+                    for info in page_infos
+                    if info["is_credit_advice"] and info["payment_amount"]
+                })
 
                 if not ca_amounts:
                     self.after(0, lambda: messagebox.showerror(
@@ -968,18 +968,6 @@ class App(tk.Tk):
 
                 self._status("Parsing summary rows…")
                 summary_rows = parse_summary(summary_text, ca_amounts)
-
-                # Second pass: mark non-anchor pages that contain a summary amount
-                # (e.g. invoices/receipts that have no banking keywords but right amount)
-                summary_amounts_set = {round(r["amount"], 2) for r in summary_rows}
-                for info in page_infos:
-                    if not info["is_credit_advice"]:
-                        for amt in info["all_amounts"]:
-                            if round(amt, 2) in summary_amounts_set:
-                                info["is_credit_advice"] = True
-                                info["payment_amount"]   = amt
-                                break
-
                 self._prog(82)
                 self._excel_company = ""
                 self._excel_date    = ""
