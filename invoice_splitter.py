@@ -648,7 +648,7 @@ class App(tk.Tk):
         self.title(f"Invoice Splitter & Matcher  {APP_VERSION}")
         self.resizable(False, False)
         self.configure(bg="#F0F4F8")
-        self._pdf_path     = None
+        self._pdf_paths    = []
         self._excel_path   = None
         self._summary_text = ""
         self._build_ui()
@@ -675,15 +675,20 @@ class App(tk.Tk):
         body.pack(fill="both")
 
         # PDF row
-        tk.Label(body, text="PDF File:", font=("Calibri", 11, "bold"),
+        tk.Label(body, text="PDF Files:", font=("Calibri", 11, "bold"),
                  bg="#F0F4F8").grid(row=0, column=0, sticky="w", pady=6)
-        self._pdf_lbl = tk.Label(body, text="No file selected",
+        self._pdf_lbl = tk.Label(body, text="No files selected",
                                   font=("Calibri", 10), bg="#F0F4F8", fg="#666",
                                   width=46, anchor="w")
         self._pdf_lbl.grid(row=0, column=1, padx=8)
-        tk.Button(body, text="Browse…", command=self._pick_pdf,
+        pdf_btn_frame = tk.Frame(body, bg="#F0F4F8")
+        pdf_btn_frame.grid(row=0, column=2)
+        tk.Button(pdf_btn_frame, text="Browse…", command=self._pick_pdf,
                   font=("Calibri", 10), bg="#1F4E79", fg="white",
-                  relief="flat", padx=10).grid(row=0, column=2)
+                  relief="flat", padx=10).pack(side="left")
+        tk.Button(pdf_btn_frame, text="✕", command=self._clear_pdf,
+                  font=("Calibri", 10), bg="#888", fg="white",
+                  relief="flat", padx=6).pack(side="left", padx=(4, 0))
 
         # Excel row (optional)
         tk.Label(body, text="Excel Summary\n(optional):", font=("Calibri", 11, "bold"),
@@ -731,11 +736,21 @@ class App(tk.Tk):
         self._btn.grid(row=5, column=0, columnspan=3, pady=(20, 4))
 
     def _pick_pdf(self):
-        p = filedialog.askopenfilename(
-            title="Select PDF", filetypes=[("PDF files", "*.pdf")])
-        if p:
-            self._pdf_path = p
-            self._pdf_lbl.config(text=os.path.basename(p), fg="#1F4E79")
+        paths = filedialog.askopenfilenames(
+            title="Select PDF files (hold Ctrl for multiple)",
+            filetypes=[("PDF files", "*.pdf")])
+        if paths:
+            self._pdf_paths = list(paths)
+            n = len(self._pdf_paths)
+            if n == 1:
+                label = os.path.basename(self._pdf_paths[0])
+            else:
+                label = f"{n} files selected"
+            self._pdf_lbl.config(text=label, fg="#1F4E79")
+
+    def _clear_pdf(self):
+        self._pdf_paths = []
+        self._pdf_lbl.config(text="No files selected", fg="#666")
 
     def _pick_excel(self):
         p = filedialog.askopenfilename(
@@ -762,8 +777,8 @@ class App(tk.Tk):
         self.after(0, lambda: self._prog_var.set(val))
 
     def _run(self):
-        if not self._pdf_path:
-            messagebox.showwarning("Missing", "Please select a PDF file.")
+        if not self._pdf_paths:
+            messagebox.showwarning("Missing", "Please select at least one PDF file.")
             return
         if not hasattr(self, "_out_dir") or not self._out_dir:
             messagebox.showwarning("Missing", "Please select an output folder.")
@@ -771,12 +786,21 @@ class App(tk.Tk):
         self._btn.config(state="disabled")
         threading.Thread(
             target=self._worker,
-            args=(self._pdf_path, self._out_dir),
+            args=(list(self._pdf_paths), self._out_dir),
             daemon=True).start()
 
-    def _worker(self, pdf_path: str, out_dir: str):
+    def _worker(self, pdf_paths: list, out_dir: str):
         try:
-            doc = fitz.open(pdf_path)
+            # Merge all selected PDFs into one document
+            if len(pdf_paths) == 1:
+                doc = fitz.open(pdf_paths[0])
+            else:
+                self._status(f"Merging {len(pdf_paths)} PDF files…")
+                doc = fitz.open()
+                for p in pdf_paths:
+                    src = fitz.open(p)
+                    doc.insert_pdf(src)
+                    src.close()
             n   = doc.page_count
             self._status(f"Opened PDF — {n} pages")
             self._prog(0)
