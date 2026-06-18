@@ -954,7 +954,12 @@ class App(tk.Tk):
                             if _sv > 5000:
                                 all_summary_amounts.add(round(_sv, 2))
 
-                page_infos: list[dict] = []
+                # Dummy entry at index 0 so that abs_idx matches merged-doc page index.
+                # page_infos[i] will correspond to merged page i (not i+1).
+                _dummy = {"is_credit_advice": False, "payment_amount": None,
+                          "all_amounts": [], "raw_text": "", "dates": [],
+                          "inv_numbers": [], "beneficiary": ""}
+                page_infos: list[dict] = [_dummy]
                 for i in range(1, n):
                     self._status(f"Scanning page {i+1} / {n}…")
                     text = ocr_page(doc, i)
